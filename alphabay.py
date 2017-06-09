@@ -23,6 +23,7 @@ ab spider, proof-of-concept. If you are interested in the software, get in touch
 # helper function to check setup
 # helper function to go around timeouts
 # report products in db every so many fetches
+# write start time, and keep track of save items/hour
 
 import os
 import datetime
