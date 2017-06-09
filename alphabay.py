@@ -9,21 +9,34 @@ ab spider, proof-of-concept. If you are interested in the software, get in touch
 # Rewrite all paths as os generic
 # Freshen links after some days?
 # download image and upload on s3 or similar
+# refactor to make object oriented
 # move from Firefox to phantom.js after login?
 # should pick also the number of sold items, and save in a different table with progression
 # use log commands rather than print commands?
+# create log file?
+# add username and password to screen
+# support multiple configuration files
+# check price
+# add random sleep
+# user alphaspider.set_page_load_timeout(30) and catch exceptions
+# report total number of products on start and on end
+# helper function to check setup
+# helper function to go around timeouts
+# report products in db every so many fetches
 
 import os
 import datetime
 # using mysqlclient 
 import MySQLdb
 import pickle
+import random
 import re
 import sys
 import subprocess
 import shlex
 import urllib
 from datetime import datetime
+from Pillow import Image
 from random import shuffle
 from selenium import webdriver
 from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
@@ -36,6 +49,43 @@ __version__ = '0.0.1'
 
 
 # will include the categories with products
+
+
+def logIn():
+    # get username and password fields
+    try:
+        # <input name="user" class="std" size="65" value="" type="text">
+        nameElement = alphaspider.find_element_by_xpath('//input[@class="std" and @name="user"]')
+        pwdElement = alphaspider.find_element_by_xpath('//input[@class="std" and @name="password"]')
+
+        nameElement.send_keys(alphauser)
+        pwdElement.send_keys(alphapwd)
+        
+        saveCaptcha()
+    except:
+        print("Could not fill the log-in form. Please do it manually.")
+
+def saveCaptcha():
+    fox = webdriver.Firefox()
+    fox.get('https://stackoverflow.com/')
+    
+    # now that we have the preliminary stuff out of the way time to get that image :D
+    captcha = alphaspider.find_element_by_id('hlogo') # find part of the page you want image of
+    captcha_location = captcha.location
+    captcha_size = captcha.size
+    screenshot_file = 'data/screenshots/screnshot.png'
+    alphaspider.save_screenshot(screenshot_file) # saves screenshot of entire page
+    
+    im = Image.open(screenshot_file) # uses PIL library to open image in memory
+    
+    left = captcha.location['x']
+    top = captcha.location['y']
+    right = captcha.location['x'] + captcha.size['width']
+    bottom = captcha.location['y'] + captcha.size['height']
+    
+    
+    im = im.crop((left, top, right, bottom)) # defines crop points
+    im.save('data/screenshots/screnshot_cropped.png') # saves new cropped image
 
 
 def dbGetProducts():
@@ -73,6 +123,7 @@ def dbSaveProduct(product):
     sql = """INSERT IGNORE INTO `alphaspider` (`id`, `title`, `brief`, `ad`, `price`, `url`, `seller`, `origin`, `destination`, `payment`, `sold_since`, `category` ) 
     VALUES (%(id)s, %(title)s, %(brief)s, %(ad)s, %(price)s, %(url)s, %(seller)s, %(origin)s, %(destination)s, %(payment)s, %(sold_since)s, %(category)s);"""
     db_cursor.execute(sql, product)
+    connection.commit()
 
 def startSpider():
     ### Starts the spider ###
@@ -154,7 +205,7 @@ def getProduct(url):
         sold_since_tmp2 = datetime.strptime(sold_since_tmp, '%b %d, %Y')
         sold_since = sold_since_tmp2.strftime('%Y-%m-%d')  
         
-        return {'id': id,
+        product = {'id': id,
             'title': title,
             'brief': brief,
             'ad': ad,
@@ -167,7 +218,10 @@ def getProduct(url):
             'sold_since' : sold_since,
             'category': category
             # timestamp, category path
-            }  
+            }
+        dbSaveProduct(product)
+        
+        return product  
     except:
         print("Cannot parse xpath correctly:", sys.exc_info()[0])
         return False
@@ -298,8 +352,9 @@ if not 'alphaspider' in locals():
     #db_cursor.execute("set names utf8mb4") 
     #db_cursor.execute("set character set utf8mb4") 
     alphaspider = startSpider()
+    logIn()
 
-input("Press Enter to continue ('now$vl')...")
+input("Press Enter to continue.")
     
 # let's find the list of all products, ids only
 db_products = dbGetProducts()
@@ -309,16 +364,18 @@ savedVars = getVars()
 categories = savedVars['categories']
 print("Total n of categories: " + str(len(categories)))
 
-categories = getCategories(site_home)
-saveVars()
+# categories = getCategories(site_home)
+# saveVars()
 
-alphaspider2 = startLightWeightSpider()
+# alphaspider2 = startLightWeightSpider()
 
-# categories = {5}
-# max_pages = 50
-# 
-# for category in categories:
-#     products = getCategoryProducts(category,max_pages)
+
+max_pages = 50
+# tmp_categories = random.sample(categories, 1)
+# tmp_categories = {5}
+tmp_categories = categories
+for category in tmp_categories:
+     products = getCategoryProducts(category,max_pages)
 #     for product in products:
 #         dbSaveProduct(product)
 #         # print "Saved "
