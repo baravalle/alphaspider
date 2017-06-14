@@ -3,3 +3,5 @@ pandas
 pprint
 datetime
 sqlite3
+Pillow
+mysqlclient
