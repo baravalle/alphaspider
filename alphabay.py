@@ -5,24 +5,30 @@ ab spider, proof-of-concept. If you are interested in the software, get in touch
 @author: Andres Baravalle
 """
 
+# change getUrl to add sanity checks in each URL that is requested
+# check if the proxy (tor) is refusing a connection
+# set command line options (db missing)
+# check yeld in python
+# check credit available for captchas
+# refresh tor IP each time it runs
+# problems around log file. Might be worth just saving on db?
+# detect flood limit message immediately
 # run a thread that checks for the login window when loading a URL and/or timeouts
+# move the vars from the pickle to the db
 # review the captcha functions
 # should we check the login page by URL?
-# it the proxy (tor) is refusing a connection
+
 # save the position of the last category spidered and restart from there
-# rewrite the category part of the scripts, to link a name to a cactegory id
+# rewrite the category part of the scripts, to link a name to a category id too
 # download image and upload on s3 or similar
 # refactor to make object oriented
 # should pick also the number of sold items, and save in a different table with progression
 # support multiple configuration files
-# write start time, and keep track of save items/hour
 # check if the combination of product and category has been saved; 
-#   if the product is in the db, check against the current category
-# identify features? e.g. if 75% of the images are identical, it's the same page
-# freshen links after some days?
+# if the product is in the db, check against the current category
 # check the categories from which we have downloaded products
-# set command line options
 # rewrite with automatic restart after one hour
+# freshen links after some days?
 
 # os should be first
 import os
@@ -31,7 +37,7 @@ import base64
 import boto3
 import datetime
 import hashlib
-#import logger
+# import logger
 import io
 import logging
 # using mysqlclient
@@ -69,8 +75,9 @@ __version__ = '0.0.1'
 # will include the categories with products
 
 def checkSettings():
+    # This function will check all the settings, before the software starts
     global categories, logger, db_products, savedVars
-    # This function will check all the settings
+    
     tmp_return = True
 
     # let's set the logging
@@ -91,6 +98,16 @@ def checkSettings():
         logger.debug("Test passed: Tor profile home.")
     else:
         tmp_return = False
+        
+    if os.path.isfile(tor["cmd"]):
+        logger.debug("Test passed: tor binary.")
+    else:
+        tmp_return = False
+         
+    if os.path.isfile(gecko_binary):
+        logger.debug("Test passed: gecko binary.")
+    else:
+        tmp_return = False        
          
     # let's check if tor is already running in the target port
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -131,7 +148,7 @@ def checkSettings():
 
 def setOptions():
     # setting global variables
-    global project_home, tor, gecko_binary, alphauser, alphapsw, db
+    global project_home, tor, gecko_binary, alphauser, alphapsw, db_connection
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--project_home", help="Set the project home in the local filesystem.")
@@ -142,7 +159,12 @@ def setOptions():
     parser.add_argument("--alphapsw", help="Set the site password")
     parser.add_argument("--db", help="Set the connection string for the db")
     parser.add_argument("--tor_cmd", help="Set the location for the Tor binary")
-    parser.add_argument("--tor_args", help="Set any args for calling Tor (typically ports)")
+    parser.add_argument("--tor_profile_folder", help="Set the Tor profile folder")
+    parser.add_argument("--tor_socks_port", help="Set the Tor socks port")
+    parser.add_argument("--tor_control_port", help="Set the Tor control port")
+
+    # let's check if there are any args
+    
     args = parser.parse_args()
     if args.verbosity:
         print("Verbosity turned on")
@@ -150,8 +172,7 @@ def setOptions():
     # let's check the folders
     if args.project_home:
         project_home = args.project_home
-    if args.tor_profile_folder:
-        tor_profile_folder = args.tor_profile_folder
+
     if args.gecko_binary:
         gecko_binary = args.gecko_binary
     if args.alphauser:
@@ -160,13 +181,18 @@ def setOptions():
         alphapsw = args.alphapsw
     if args.db:
         db = args.db
+        # need to expand on this, extracting the different parts
     if args.tor_cmd:
         tor["cmd"] = args.tor_cmd
-    if args.tor_args:
-        tor["args"] = args.tor_args
+    if args.tor_profile_folder:
+        tor["profile_folder"] = args.tor_profile_folder
+    if args.tor_socks_port:
+        tor["socks_port"] = args.tor_socks_port
+    if args.control_port:
+        tor["control_port"] = args.tor_control_port
     
-
 def newUser():
+    # This function create a new user that will be used during the spidering session.
 
     getUrl(site_new_user)
     
@@ -212,12 +238,33 @@ def newUser():
                 time.sleep(0.8)
 
                 if identifyPage("mnemonic") != "mnemonic":
+                    logger.error('Not on the mnemonic page.')
+                    # it might just be a captcha error
                     return False
                 else:
                     # should we save the username?
-                    print("Will finish later")                    
-                    return True
-                # <input class="bstd" value="Login" type="submit">
+
+                    # let's pick the mnemonic
+                    mnemonicElement = alphaspider.find_element_by_xpath('//div[@class="infoboxbody"]/p[@class="std"][2]')
+                    mnemonic_text = mnemonicElement.get_attribute("innerText")  
+                    mnemonicElement2 = alphaspider.find_element_by_xpath('//form[@name="formMnemonic"]//input[@class="std"]')
+
+                    mnemonicElement2.click()
+                    mnemonicElement2.clear()
+                    mnemonicElement2.send_keys(mnemonic_text)
+
+                    submitElement2 = alphaspider.find_element_by_xpath('//input[@class="bstd" and @value="Continue"]')
+
+                    # final step in user creation
+                    submitElement2.click()
+        
+                    time.sleep(0.8)
+
+                    if identifyPage("home") != "home":
+                        return False
+                    else:
+                        return True
+                  # <input class="bstd" value="Login" type="submit">
                 
                 
         except BaseException as e:
@@ -230,6 +277,7 @@ def newUser():
 
 def totalProducts():
     # returns the total n of products in the db
+    
     sql = 'select count(id) as count from alphaspider'
     db_cursor.execute(sql)
     if db_total_products == db_cursor.fetchall():
@@ -242,9 +290,9 @@ def printLog():
     # and how many products are in the db
     logger.info("Test")
 
+
 def identifyPage(page):
-    # check if it's the login page
-    # if there is a captcha, it's likely it's the login page
+    # check if the current page is any of the significant pages. 
     # return True
     
     identified_page = False
@@ -258,7 +306,7 @@ def identifyPage(page):
         elif page == "home" and alphaspider.find_element_by_xpath("//h1[@class='std' and contains(text(),'Welcome, ')]"):
             identified_page = "home"
             logger.debug("This is the home page.")
-        elif page == "mnemonic." and alphaspider.find_element_by_xpath("//h1[@class='infobox' and contains(text(),'Your Mnemonic')]"):
+        elif page == "mnemonic" and alphaspider.find_element_by_xpath("//h1[@class='infobox' and contains(text(),'Your Mnemonic')]"):
             identified_page = "mnemonic"
             logger.debug("This is the mnemonic page.")
             
@@ -274,9 +322,8 @@ def identifyPage(page):
     return identified_page
 
 def saveCaptcha():
-    # fox = webdriver.Firefox()
-    # fox.get('https://stackoverflow.com/')
-    # '//img[@id="captcha"]'
+    # Saves the captcha
+
     # now that we have the preliminary stuff out of the way time to get that image :D
     captcha = alphaspider.find_element_by_id('captcha')  # find part of the page you want image of
     captcha_location = captcha.location
@@ -328,7 +375,7 @@ def deleteOldCaptcha():
     print("Nothing works here yet")
 
 def solveCaptcha(captcha_file_name):
-    # This function will use a third party service to try to solve the captcha
+    # Captcha solved, using third party service
     api = TwoCaptchaApi(captcha_key)
     
     with open(captcha_file_name, 'rb') as captcha_file:
@@ -359,6 +406,7 @@ def dbConnect():
 
 def dbGetProducts():
     # will get the list of products already saved    
+       
     sql = "SELECT id FROM `alphaspider` order by id"
     
     db_cursor.execute(sql)
@@ -366,10 +414,19 @@ def dbGetProducts():
     return db_products
 
 def getUrl(url):
+    # gets a URL, using a random timer
     
     time.sleep(random.uniform(0.5, 0.95))
     try:
         alphaspider.get(url)
+        
+        # do sanity checks on the page received.
+        
+        # e.g. check if we need to slow down
+        
+        
+        
+        
         return True
     except:
         logger.error("Cannot get " + url + " correctly. Currently at " + alphaspider.current_url + ".")
@@ -386,6 +443,7 @@ def getUrl(url):
     
 
 def getVars():    
+    # open the vars from the pickle  
       
     with open(picklefile, 'rb') as pickleFile:
         savedVars = pickle.load(pickleFile)
@@ -393,6 +451,7 @@ def getVars():
     return savedVars
         
 def saveVars():
+    # saves the vars in a pickle file
     
     # let's save categories, cookies etc
     savedVars['cookies'] = alphaspider.get_cookies() 
@@ -404,14 +463,17 @@ def saveVars():
     
 
 def dbSaveProduct(product):    
- 
+    # saves a product in the database
+    
     sql = """INSERT IGNORE INTO `alphaspider` (`id`, `title`, `brief`, `ad`, `price`, `url`, `seller`, `origin`, `destination`, `payment`, `sold_since`, `products_sold`, `category`, `image`) 
     VALUES (%(id)s, %(title)s, %(brief)s, %(ad)s, %(price)s, %(url)s, %(seller)s, %(origin)s, %(destination)s, %(payment)s, %(sold_since)s, %(products_sold)s, %(category)s, %(image)s);"""
     db_cursor.execute(sql, product)
     connection.commit()
 
 def autoLogin():
-    #alphaspider.get(site_login)
+    # logs in automatically in the web site, using one of the given users.
+    
+    # alphaspider.get(site_login)
     getUrl(site_login)
     # first of all, let's download the captcha
     
@@ -473,9 +535,10 @@ def autoLogin():
         return False
 
 def startSpider():
-    global alphaspider
+    # Starts the spider
     
-    ### Starts the spider ###
+    global alphaspider
+        
     # set a logfile
     webdriver.firefox.logfile = logfile
         
@@ -515,24 +578,27 @@ def startSpider():
     # starting the tor browser may take some time
     
     # get the login URL
-    autologin_successful = autoLogin()
-    while autologin_successful == False:
-        logger.info("Let's try again.")
-        autologin_successful = autoLogin()
+#    autologin_successful = autoLogin()
+#    while autologin_successful == False:
+#        logger.info("Let's try again.")
+#        input("Press any key to start again.")
+#        autologin_successful = autoLogin()
 
-    #let's try the same but with new users
-#    new_user_successful = newUser()
-#
+    # let's try the same but with new users
+    new_user_successful = newUser()
+
 #    if new_user_successful == False:
 #        sys.exit("Something is broken.") 
-#    
-#    while  new_user_successful == False:
-#        logger.info("Let's try again.")
-#        new_user_successful = newUser()
+    
+    while  new_user_successful == False:
+        logger.info("Let's try again.")
+        new_user_successful = newUser()
         
     return True
 
 def startLightWeightSpider():
+    # starts the lightweight browser
+    
     global alphaspider
     
     caps2 = dict(webdriver.DesiredCapabilities.PHANTOMJS)
@@ -557,6 +623,7 @@ def startLightWeightSpider():
 
 def getProduct(url):
     # fetches all product details from an URL
+    
     global saved_products
     # accesses the global counter
     
@@ -663,7 +730,7 @@ def uploadFile(file, path):
     # This is an helper function to upload files. It will have to be refined depending on the storage used.
     # paths: data/screenshots, data/products, data/captchas
 
-    s3_client = boto3.client('s3', aws_access_key_id = boto3_settings['aws_access_key_id'], aws_secret_access_key = boto3_settings['aws_secret_access_key'], region_name =  boto3_settings['region_name'])
+    s3_client = boto3.client('s3', aws_access_key_id=boto3_settings['aws_access_key_id'], aws_secret_access_key=boto3_settings['aws_secret_access_key'], region_name=boto3_settings['region_name'])
     
     if s3_client.upload_file(file, aws_bucket, path):
         return True
@@ -674,20 +741,21 @@ def uploadFile(file, path):
 def printProducts(products, product_attr):
     # prints a specific attribute for all the products in a product list, in the terminal
     # e.g.: printProducts(products, "brief")
+    
     for i in products:
         print(''.join(c for c in i[product_attr] if c <= '\uFFFF'))
 
 
 def getCategoryProducts(category, limit):
-    # get the products in a category
-    # it's just a front-end for runQuery
+    # get the products in a category; it's just a front-end for runQuery
+    
     url = site_category + str(category)
     products = runQuery(url, limit)
     return products
     
 def getQueryProducts(query, limit):
-    # get all the products in a query
-    # it's just a front-end for runQuery
+    # get all the products in a query; it's just a front-end for runQuery
+    
     url = site_search + urllib.urlencode(query)
     products = runQuery(url, limit)
     return products
@@ -712,7 +780,7 @@ def runQuery(query, limit):
         next_URL = query + '&pg=' + str(i)
         logger.info("Looking for products: " + next_URL)
         getUrl(next_URL)
-        #alphaspider.get(next_URL)
+        # alphaspider.get(next_URL)
 
         # todo: check how many pages
         
@@ -742,7 +810,7 @@ def runQuery(query, limit):
     return products
 
 def saveScreenShot():
-    # get a screenshot
+    # savse a screenshot
     # now = str(datetime.datetime.now())
     # screenshot_file = os.path.join(project_home, 'data', 'screenshots',  now  + 'screnshot.png')
 
@@ -756,6 +824,7 @@ def saveScreenShot():
 
 def getCategories(url):
     # get all the categories and subcategories from the website
+    
     global categories
     # short sleep
     # class="content1"
@@ -777,6 +846,8 @@ def getCategories(url):
                     getCategories(site_category + str(cat))
 
 def findNumberOfPages(url):
+    # get the number of pages for a specific product search and/or category
+    
     # get the item before this:
     # <img src="images/last.png" alt="" class="std" height="16" width="16">
     # <img src="images/nolast.png" alt="" class="std" height="16" width="16">
@@ -815,6 +886,9 @@ if not 'alphaspider' in locals():
     start_time = time.monotonic()
     saved_products = 0
     
+    # let's see if there are any command line options
+    setOptions()
+    
     # set up db; will connect to db, load db_products
     if checkSettings():
         
@@ -825,8 +899,9 @@ if not 'alphaspider' in locals():
     
         # check if we are not logged in
         # this will not work with a headless browser - may need to rewrite this part
-        while identifyPage("home") != "home":
-            input("Press recheck your login details, and Enter to continue.")
+        # the next 2 lines should be out of date
+        # while identifyPage("home") != "home":
+        #    input("Press recheck your login details, and Enter to continue.")
     
         # categories = set([])
         # categories = getCategories(site_home)
@@ -849,6 +924,3 @@ if not 'alphaspider' in locals():
             if time.monotonic() - start_time > 3600:
                 logger.info("Time to stop. No point in raising suspicions.")
                 break
-
-
-
